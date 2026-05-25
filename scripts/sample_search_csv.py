@@ -23,8 +23,8 @@ from bilibili_comments.sample import (
     rank_based_sample_videos,
 )
 
-DEFAULT_INPUT = Path("search_生育_p20.csv")
-DEFAULT_OUTPUT = Path("search_生育_p20_sampled.csv")
+DEFAULT_INPUT = Path("search_生育.csv")
+DEFAULT_OUTPUT = Path("search_生育_sampled.csv")
 
 
 def main() -> None:

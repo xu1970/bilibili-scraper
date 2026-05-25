@@ -77,6 +77,13 @@ CATEGORY_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
             "吃货",
         ),
     ),
+        (
+        "category:others",
+        (
+            "户外",
+            "极限运动",
+        ),
+    ),
 )
 
 MIN_DANMAKU_EXCLUSIVE = 10  # exclude when danmaku <= this value
