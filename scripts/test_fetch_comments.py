@@ -18,7 +18,7 @@ BVID = "BV1vVLw6KEFb"
 
 async def main() -> None:
     credential = load_credential()
-    ref, page = await fetch_comments_for_bvid(BVID, credential, pn=1, ps=20)
+    ref, page = await fetch_comments_for_bvid(BVID, credential, ps=20)
 
     print(f"BV:  {ref.bvid}")
     print(f"aid: {ref.aid}")

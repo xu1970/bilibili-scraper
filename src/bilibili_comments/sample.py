@@ -17,10 +17,17 @@ MID_RANK_START = 51
 MID_RANK_END = 350
 REST_RANK_START = 351
 
-TOP_SAMPLE_COUNT = 15  # 20% of top 50
+TOP_SAMPLE_COUNT = 10  # 20% of top-50 bucket when eligible pool is large
 MID_SAMPLE_RATE = 0.10  # 10% of ranks 51–350 (up to 30 when bucket is full)
 MID_SAMPLE_MAX = int((MID_RANK_END - MID_RANK_START + 1) * MID_SAMPLE_RATE)  # 30
-TARGET_SAMPLE_TOTAL = TOP_SAMPLE_COUNT + MID_SAMPLE_MAX + 10  # 50
+REST_SAMPLE_COUNT = 10
+TARGET_SAMPLE_TOTAL = TOP_SAMPLE_COUNT + MID_SAMPLE_MAX + REST_SAMPLE_COUNT  # 50
+
+# When fewer than this many videos pass filters, use tiered adaptive rates.
+ADAPTIVE_SAMPLE_ELIGIBLE_THRESHOLD = 350
+BLOCK_SIZE = 50
+TOP_RATE_BONUS = 0.05  # +5% on base rate for first block
+RATE_STEP_PER_BLOCK = 0.02  # −2% per subsequent block of 50
 
 
 def _parse_view_count(value: Any) -> int:
@@ -101,6 +108,102 @@ def _bucket_for_eligible_rank(eligible_rank: int) -> str:
     return "rest_351+"
 
 
+def _block_bucket_name(block_index: int) -> str:
+    start = block_index * BLOCK_SIZE + 1
+    end = (block_index + 1) * BLOCK_SIZE
+    return f"tier_{block_index}_rank{start}-{end}"
+
+
+def _split_eligible_blocks(eligible: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
+    ordered = sorted(eligible, key=lambda r: int(r["eligible_rank"]))
+    return [
+        ordered[i : i + BLOCK_SIZE] for i in range(0, len(ordered), BLOCK_SIZE)
+    ]
+
+
+def _reconcile_block_targets(
+    targets: list[int], block_sizes: list[int], *, target_total: int
+) -> list[int]:
+    """Adjust per-block sample counts to sum exactly to ``target_total``."""
+    adjusted = [min(targets[i], block_sizes[i]) for i in range(len(targets))]
+    total = sum(adjusted)
+
+    while total < target_total:
+        progressed = False
+        for i in range(len(adjusted)):
+            if adjusted[i] < block_sizes[i]:
+                adjusted[i] += 1
+                total += 1
+                progressed = True
+                if total >= target_total:
+                    break
+        if not progressed:
+            break
+
+    while total > target_total:
+        progressed = False
+        for i in range(len(adjusted) - 1, -1, -1):
+            if adjusted[i] > 0:
+                adjusted[i] -= 1
+                total -= 1
+                progressed = True
+                if total <= target_total:
+                    break
+        if not progressed:
+            break
+
+    return adjusted
+
+
+def _adaptive_sample_videos(
+    eligible: list[dict[str, Any]],
+    rng: random.Random,
+    *,
+    target_total: int = TARGET_SAMPLE_TOTAL,
+) -> list[dict[str, Any]]:
+    """
+    Sample when the eligible pool has fewer than 350 videos.
+
+    1. ``base_rate = target_total / len(eligible)``
+    2. Block 0 (ranks 1–50): ``base_rate + 5%``
+    3. Each further block of 50: reduce rate by 2% until 50 videos are allocated
+    """
+    n = len(eligible)
+    if n == 0:
+        return []
+    if n <= target_total:
+        chosen = list(eligible)
+        rng.shuffle(chosen)
+        for row in chosen:
+            block_index = (int(row["eligible_rank"]) - 1) // BLOCK_SIZE
+            row["sample_bucket"] = _block_bucket_name(block_index)
+            row["review_marker"] = ""
+        return chosen
+
+    base_rate = target_total / n
+    blocks = _split_eligible_blocks(eligible)
+    raw_targets: list[int] = []
+    for block_index, block in enumerate(blocks):
+        rate = base_rate + TOP_RATE_BONUS - RATE_STEP_PER_BLOCK * block_index
+        rate = max(0.0, rate)
+        raw_targets.append(int(round(rate * len(block))))
+
+    block_sizes = [len(block) for block in blocks]
+    targets = _reconcile_block_targets(
+        raw_targets, block_sizes, target_total=target_total
+    )
+
+    sampled: list[dict[str, Any]] = []
+    for block_index, (block, count) in enumerate(zip(blocks, targets)):
+        if count <= 0:
+            continue
+        bucket = _block_bucket_name(block_index)
+        sampled.extend(_sample_from_bucket(rng, block, count, bucket))
+
+    sampled.sort(key=lambda r: int(r["eligible_rank"]))
+    return sampled[:target_total]
+
+
 def _sample_from_bucket(
     rng: random.Random,
     bucket: list[dict[str, Any]],
@@ -117,27 +220,11 @@ def _sample_from_bucket(
     return chosen
 
 
-def rank_based_sample_videos(
-    rows: list[dict[str, Any]],
-    *,
-    min_view_count: int = MIN_VIEW_COUNT,
-    seed: int | None = None,
+def _standard_sample_videos(
+    eligible: list[dict[str, Any]],
+    rng: random.Random,
 ) -> list[dict[str, Any]]:
-    """
-    Sample from the filtered list in search output order.
-
-    - Top eligible ranks 1–50: 10 videos (20% of 50)
-    - Ranks 51–350: 10% of that range (up to 30 videos)
-    - Rank 351+: remainder to reach 50 total (up to 10 videos)
-    """
-    rng = random.Random(seed)
-    ordered = assign_eligible_ranks(rows)
-
-    eligible = [
-        r
-        for r in ordered
-        if r.get("eligible_rank") != "" and eligible_for_sampling(r, min_view_count=min_view_count)
-    ]
+    """Fixed top / mid / rest buckets when eligible pool has at least 350 videos."""
     top = [r for r in eligible if int(r["eligible_rank"]) <= TOP_RANK_END]
     mid = [
         r
@@ -162,23 +249,49 @@ def rank_based_sample_videos(
 
     shortfall = TARGET_SAMPLE_TOTAL - len(sampled)
     if shortfall > 0:
-        mid_remaining = [
-            r for r in mid if str(r["aid"]) not in sampled_aids
-        ]
+        mid_remaining = [r for r in mid if str(r["aid"]) not in sampled_aids]
         spill = _sample_from_bucket(rng, mid_remaining, shortfall, "mid_51-350")
         sampled.extend(spill)
         sampled_aids = {str(r["aid"]) for r in sampled}
         shortfall = TARGET_SAMPLE_TOTAL - len(sampled)
 
     if shortfall > 0:
-        top_remaining = [
-            r for r in top if str(r["aid"]) not in sampled_aids
-        ]
+        top_remaining = [r for r in top if str(r["aid"]) not in sampled_aids]
         spill = _sample_from_bucket(rng, top_remaining, shortfall, "top_1-50")
         sampled.extend(spill)
 
     sampled.sort(key=lambda r: int(r["eligible_rank"]))
-    return sampled
+    return sampled[:TARGET_SAMPLE_TOTAL]
+
+
+def rank_based_sample_videos(
+    rows: list[dict[str, Any]],
+    *,
+    min_view_count: int = MIN_VIEW_COUNT,
+    seed: int | None = None,
+) -> list[dict[str, Any]]:
+    """
+    Sample from the filtered list in search output order (target: 50 videos).
+
+    When ``eligible < 350``: tiered adaptive rates (base rate + 5% for ranks
+    1–50, −2% per subsequent block of 50).
+
+    When ``eligible >= 350``: fixed buckets — 10 from top 50, up to 30 from
+    51–350, remainder from 351+.
+    """
+    rng = random.Random(seed)
+    ordered = assign_eligible_ranks(rows)
+
+    eligible = [
+        r
+        for r in ordered
+        if r.get("eligible_rank") != "" and eligible_for_sampling(r, min_view_count=min_view_count)
+    ]
+
+    if len(eligible) < ADAPTIVE_SAMPLE_ELIGIBLE_THRESHOLD:
+        return _adaptive_sample_videos(eligible, rng)
+
+    return _standard_sample_videos(eligible, rng)
 
 
 def mark_rows_in_sample(

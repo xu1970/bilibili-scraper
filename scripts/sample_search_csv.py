@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from bilibili_comments.export import write_sampled_search_csv, write_search_csv
 from bilibili_comments.filter_videos import apply_search_filters, filter_summary
 from bilibili_comments.sample import (
+    ADAPTIVE_SAMPLE_ELIGIBLE_THRESHOLD,
     MID_SAMPLE_MAX,
     MIN_VIEW_COUNT,
     TARGET_SAMPLE_TOTAL,
@@ -64,7 +65,12 @@ def main() -> None:
     buckets = Counter(r.get("sample_bucket") for r in sampled)
     print(f"input:      {args.input.resolve()} (ranks + in_sample updated)")
     print(f"eligible:   {summary['eligible']} videos passed auto-filter")
-    print(f"plan:       top={TOP_SAMPLE_COUNT}, mid<={MID_SAMPLE_MAX}, total={TARGET_SAMPLE_TOTAL}")
+    mode = (
+        "adaptive tiers"
+        if summary["eligible"] < ADAPTIVE_SAMPLE_ELIGIBLE_THRESHOLD
+        else f"top={TOP_SAMPLE_COUNT}, mid<={MID_SAMPLE_MAX}"
+    )
+    print(f"plan:       {mode}, total={TARGET_SAMPLE_TOTAL}")
     print(f"seed:       {args.seed}")
     print(f"sampled:    {len(sampled)} videos")
     print(f"by bucket:  {dict(sorted(buckets.items()))}")

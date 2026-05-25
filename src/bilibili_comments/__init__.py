@@ -1,9 +1,15 @@
 """Bilibili comment scraping utilities."""
 
 from .auth import load_credential, load_credentials
-from .export import write_comments_csv, write_sampled_search_csv, write_search_csv
+from .export import (
+    write_comments_csv,
+    write_sampled_comments_csv,
+    write_sampled_search_csv,
+    write_search_csv,
+)
 from .filter_videos import apply_search_filters, compute_exclusion_reason, is_eligible_for_sampling
 from .review import apply_review_replacements, is_irrelevant, load_sampled_csv
+from .scrape_sampled import load_sampled_videos, scrape_sampled_videos
 from .sample import (
     assign_eligible_ranks,
     load_search_csv,
@@ -16,6 +22,7 @@ from .scrape import (
     comment_text,
     describe_sort_mode,
     extract_replies,
+    fetch_all_top_level,
     fetch_comments_for_bvid,
     fetch_n_pages,
     fetch_top_level_page,
@@ -37,6 +44,9 @@ __all__ = [
     "is_eligible_for_sampling",
     "is_irrelevant",
     "load_sampled_csv",
+    "load_sampled_videos",
+    "scrape_sampled_videos",
+    "write_sampled_comments_csv",
     "load_search_csv",
     "search_videos",
     "assign_eligible_ranks",
@@ -49,6 +59,7 @@ __all__ = [
     "comment_text",
     "describe_sort_mode",
     "extract_replies",
+    "fetch_all_top_level",
     "fetch_comments_for_bvid",
     "fetch_top_level_page",
     "fetch_two_pages",

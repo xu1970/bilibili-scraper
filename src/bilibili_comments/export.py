@@ -17,11 +17,37 @@ CSV_COLUMNS = [
     "reply_count",
 ]
 
+SAMPLED_COMMENTS_CSV_COLUMNS = [
+    "aid",
+    "comment_level",
+    "is_top_comment",
+    "rpid",
+    "parent_rpid",
+    "root_rpid",
+    "username",
+    "comment_text",
+    "timestamp",
+    "like_count",
+    "reply_count",
+]
+
 
 def _format_timestamp(unix_ts: int) -> str:
     if not unix_ts:
         return ""
     return datetime.fromtimestamp(unix_ts, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+
+
+def _export_timestamp(value: Any) -> str:
+    """Accept unix int or an already-formatted timestamp string."""
+    if value is None or value == "":
+        return ""
+    if isinstance(value, (int, float)):
+        return _format_timestamp(int(value))
+    text = str(value).strip()
+    if text.isdigit():
+        return _format_timestamp(int(text))
+    return text
 
 
 def write_comments_csv(rows: list[dict[str, Any]], path: Path | str) -> Path:
@@ -39,9 +65,39 @@ def write_comments_csv(rows: list[dict[str, Any]], path: Path | str) -> Path:
                     "rpid": row.get("rpid", ""),
                     "comment_text": row.get("comment_text", ""),
                     "username": row.get("username", ""),
-                    "timestamp": _format_timestamp(int(row.get("timestamp", 0) or 0)),
+                    "timestamp": _export_timestamp(row.get("timestamp")),
                     "like_count": row.get("like_count", 0),
                     "reply_count": row.get("reply_count", 0),
+                }
+            )
+
+    return out
+
+
+def write_sampled_comments_csv(rows: list[dict[str, Any]], path: Path | str) -> Path:
+    """Write scraped comments from sampled videos to one combined CSV."""
+    out = Path(path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+
+    with out.open("w", encoding="utf-8-sig", newline="") as f:
+        writer = csv.DictWriter(
+            f, fieldnames=SAMPLED_COMMENTS_CSV_COLUMNS, extrasaction="ignore"
+        )
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(
+                {
+                    "aid": row.get("video_aid", row.get("aid", "")),
+                    "comment_level": row.get("comment_level", ""),
+                    "is_top_comment": row.get("is_top_comment", "no"),
+                    "rpid": row.get("rpid", ""),
+                    "parent_rpid": row.get("parent_rpid", ""),
+                    "root_rpid": row.get("root_rpid", ""),
+                    "username": row.get("username", ""),
+                    "comment_text": row.get("comment_text", ""),
+                    "timestamp": _export_timestamp(row.get("timestamp")),
+                    "like_count": row.get("like_count", 0),
+                    "reply_count": row.get("reply_count", ""),
                 }
             )
 

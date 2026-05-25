@@ -11,11 +11,13 @@ from typing import Any
 
 from .filter_videos import is_eligible_for_sampling
 from .sample import (
+    BLOCK_SIZE,
     MID_RANK_END,
     MID_RANK_START,
     MIN_VIEW_COUNT,
     REST_RANK_START,
     TOP_RANK_END,
+    _block_bucket_name,
     _parse_view_count,
     load_search_csv,
 )
@@ -84,7 +86,24 @@ def _bucket_name_for_row(row: dict[str, Any]) -> str:
     return "rest_351+"
 
 
+def _tier_block_bounds(bucket_name: str) -> tuple[int, int] | None:
+    """Parse ``tier_{k}_rank{start}-{end}`` adaptive bucket names."""
+    if not bucket_name.startswith("tier_"):
+        return None
+    try:
+        block_index = int(bucket_name.split("_", 2)[1])
+    except (IndexError, ValueError):
+        return None
+    start = block_index * BLOCK_SIZE + 1
+    end = (block_index + 1) * BLOCK_SIZE
+    return start, end
+
+
 def _eligible_rank_in_bucket(eligible_rank: int, bucket_name: str) -> bool:
+    tier_bounds = _tier_block_bounds(bucket_name)
+    if tier_bounds is not None:
+        start, end = tier_bounds
+        return start <= eligible_rank <= end
     if bucket_name == "top_1-50":
         return eligible_rank <= TOP_RANK_END
     if bucket_name == "mid_51-350":
@@ -119,8 +138,18 @@ def _pool_candidates_for_bucket(
     return candidates
 
 
+def _bucket_fallback_chain(bucket_name: str) -> tuple[str, ...]:
+    """If a bucket is exhausted, try earlier rank tiers, then legacy buckets."""
+    tier_bounds = _tier_block_bounds(bucket_name)
+    if tier_bounds is not None:
+        block_index = int(bucket_name.split("_", 2)[1])
+        fallbacks = [_block_bucket_name(i) for i in range(block_index - 1, -1, -1)]
+        return tuple(fallbacks)
+    return _LEGACY_BUCKET_FALLBACK.get(bucket_name, ())
+
+
 # If a rank bucket has no spare videos, try the next broader bucket.
-_BUCKET_FALLBACK: dict[str, tuple[str, ...]] = {
+_LEGACY_BUCKET_FALLBACK: dict[str, tuple[str, ...]] = {
     "rest_351+": ("mid_51-350", "top_1-50"),
     "mid_51-350": ("top_1-50",),
 }
@@ -139,7 +168,7 @@ def find_replacement_candidate(
 
     Returns (candidate row, pool bucket actually drawn from).
     """
-    buckets_to_try = (bucket_name, *_BUCKET_FALLBACK.get(bucket_name, ()))
+    buckets_to_try = (bucket_name, *_bucket_fallback_chain(bucket_name))
     for try_bucket in buckets_to_try:
         eligible = _pool_candidates_for_bucket(
             pool,
