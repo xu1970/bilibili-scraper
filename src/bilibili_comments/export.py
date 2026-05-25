@@ -112,6 +112,7 @@ REPLACEMENT_LOG_COLUMNS = [
     "replaced_at",
     "page",
     "sample_bucket",
+    "pool_bucket",
     "original_rank",
     "original_eligible_rank",
     "original_title",

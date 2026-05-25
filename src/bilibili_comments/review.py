@@ -119,6 +119,44 @@ def _pool_candidates_for_bucket(
     return candidates
 
 
+# If a rank bucket has no spare videos, try the next broader bucket.
+_BUCKET_FALLBACK: dict[str, tuple[str, ...]] = {
+    "rest_351+": ("mid_51-350", "top_1-50"),
+    "mid_51-350": ("top_1-50",),
+}
+
+
+def find_replacement_candidate(
+    pool: list[dict[str, Any]],
+    bucket_name: str,
+    rng: random.Random,
+    *,
+    min_view_count: int,
+    reserved_aids: set[str],
+) -> tuple[dict[str, Any], str]:
+    """
+    Pick a replacement from the same rank bucket (with fallback if exhausted).
+
+    Returns (candidate row, pool bucket actually drawn from).
+    """
+    buckets_to_try = (bucket_name, *_BUCKET_FALLBACK.get(bucket_name, ()))
+    for try_bucket in buckets_to_try:
+        eligible = _pool_candidates_for_bucket(
+            pool,
+            try_bucket,
+            min_view_count=min_view_count,
+            reserved_aids=reserved_aids,
+        )
+        if eligible:
+            return rng.choice(eligible), try_bucket
+
+    raise RuntimeError(
+        f"No replacement available for sample bucket {bucket_name!r} "
+        f"(including fallbacks {buckets_to_try[1:]!r}). "
+        f"All eligible videos in those rank ranges are already in the sample."
+    )
+
+
 def _row_snapshot(row: dict[str, Any]) -> dict[str, Any]:
     return {
         "page": row.get("page"),
@@ -165,21 +203,13 @@ def apply_review_replacements(
         bucket_name = _bucket_name_for_row(row)
         original = _row_snapshot(row)
 
-        eligible = _pool_candidates_for_bucket(
+        replacement, pool_bucket = find_replacement_candidate(
             pool,
             bucket_name,
+            rng,
             min_view_count=min_view_count,
             reserved_aids=reserved_aids,
         )
-
-        if not eligible:
-            raise RuntimeError(
-                f"No replacement available for bucket {bucket_name!r} "
-                f"(aid={row.get('aid')!r}). "
-                f"All eligible videos in this rank range are already in the sample."
-            )
-
-        replacement = rng.choice(eligible)
         aid = str(replacement["aid"])
         reserved_aids.add(aid)
 
@@ -199,6 +229,7 @@ def apply_review_replacements(
                 "replaced_at": replaced_at,
                 "page": original["page"],
                 "sample_bucket": bucket_name,
+                "pool_bucket": pool_bucket,
                 "original_rank": original["rank"],
                 "original_eligible_rank": original["eligible_rank"],
                 "original_title": original["title"],
