@@ -12,10 +12,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from bilibili_comments.export import write_search_csv
 from bilibili_comments.filter_videos import apply_search_filters, filter_summary
+from bilibili_comments.sample import assign_eligible_ranks
 from bilibili_comments.search_videos import search_videos
 
 DEFAULT_KEYWORD = "生育"
-DEFAULT_PAGES = 20
+DEFAULT_PAGES = 34
+DEFAULT_OUTPUT = Path("search_生育_p20.csv")
 
 
 async def main() -> None:
@@ -38,10 +40,10 @@ async def main() -> None:
 
     rows = await search_videos(args.keyword, args.pages, delay_seconds=args.delay)
     apply_search_filters(rows)
+    assign_eligible_ranks(rows)
 
     if args.output is None:
-        safe_kw = args.keyword.replace("/", "_")
-        args.output = Path(f"search_{safe_kw}_p{args.pages}.csv")
+        args.output = DEFAULT_OUTPUT
 
     out = write_search_csv(rows, args.output)
 

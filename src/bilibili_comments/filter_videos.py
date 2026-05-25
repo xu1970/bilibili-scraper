@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from re import I
 from typing import Any
 
 # (reason label, keywords matched in tags or typename/label)
@@ -35,7 +36,7 @@ CATEGORY_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
             "电影",
             "影视",
             "单片",
-            "剧情"
+            "剧情",
             "movies",
             "movie",
         ),

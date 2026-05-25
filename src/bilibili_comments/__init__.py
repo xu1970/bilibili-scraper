@@ -4,7 +4,11 @@ from .auth import load_credential, load_credentials
 from .export import write_comments_csv, write_sampled_search_csv, write_search_csv
 from .filter_videos import apply_search_filters, compute_exclusion_reason, is_eligible_for_sampling
 from .review import apply_review_replacements, is_irrelevant, load_sampled_csv
-from .sample import load_search_csv, stratified_sample_videos
+from .sample import (
+    assign_eligible_ranks,
+    load_search_csv,
+    rank_based_sample_videos,
+)
 from .search_videos import search_videos
 from .scrape import (
     CommentSort,
@@ -35,7 +39,8 @@ __all__ = [
     "load_sampled_csv",
     "load_search_csv",
     "search_videos",
-    "stratified_sample_videos",
+    "assign_eligible_ranks",
+    "rank_based_sample_videos",
     "write_comments_csv",
     "write_sampled_search_csv",
     "write_search_csv",

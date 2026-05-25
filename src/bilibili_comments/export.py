@@ -51,6 +51,8 @@ def write_comments_csv(rows: list[dict[str, Any]], path: Path | str) -> Path:
 SEARCH_CSV_COLUMNS = [
     "page",
     "rank",
+    "search_rank",
+    "eligible_rank",
     "bvid",
     "title",
     "uploader",
@@ -77,6 +79,8 @@ def write_search_csv(rows: list[dict[str, Any]], path: Path | str) -> Path:
                 {
                     "page": row.get("page", ""),
                     "rank": row.get("rank", ""),
+                    "search_rank": row.get("search_rank", ""),
+                    "eligible_rank": row.get("eligible_rank", ""),
                     "bvid": row.get("bvid", ""),
                     "title": row.get("title", ""),
                     "uploader": row.get("uploader", ""),
@@ -94,6 +98,8 @@ def write_search_csv(rows: list[dict[str, Any]], path: Path | str) -> Path:
 
 
 SAMPLED_SEARCH_CSV_COLUMNS = [
+    "eligible_rank",
+    "sample_bucket",
     "page",
     "rank",
     "title",
@@ -105,11 +111,14 @@ SAMPLED_SEARCH_CSV_COLUMNS = [
 REPLACEMENT_LOG_COLUMNS = [
     "replaced_at",
     "page",
+    "sample_bucket",
     "original_rank",
+    "original_eligible_rank",
     "original_title",
     "original_view_count",
     "original_aid",
     "replacement_rank",
+    "replacement_eligible_rank",
     "replacement_title",
     "replacement_view_count",
     "replacement_aid",
@@ -129,6 +138,8 @@ def write_sampled_search_csv(rows: list[dict[str, Any]], path: Path | str) -> Pa
         for row in rows:
             writer.writerow(
                 {
+                    "eligible_rank": row.get("eligible_rank", ""),
+                    "sample_bucket": row.get("sample_bucket", ""),
                     "page": row.get("page", ""),
                     "rank": row.get("rank", ""),
                     "title": row.get("title", ""),

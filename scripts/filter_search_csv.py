@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from bilibili_comments.export import write_search_csv
 from bilibili_comments.filter_videos import apply_search_filters, filter_summary, is_eligible_for_sampling
-from bilibili_comments.sample import load_search_csv
+from bilibili_comments.sample import assign_eligible_ranks, load_search_csv
 
 DEFAULT_INPUT = Path("search_生育_p20.csv")
 
@@ -42,6 +42,7 @@ def main() -> None:
             )
 
     apply_search_filters(rows)
+    assign_eligible_ranks(rows)
     out_path = args.output or args.input
     write_search_csv(rows, out_path)
 
