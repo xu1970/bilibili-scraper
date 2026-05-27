@@ -10,22 +10,19 @@ from collections.abc import Callable
 from typing import Any
 
 from bilibili_api import aid2bvid, comment
-from bilibili_api.exceptions import ApiException, ResponseCodeException
 from bilibili_api.utils.credential import Credential
 
-from .request_guard import call_with_retry, configure_http_timeouts
+from .request_guard import call_with_retry_or_default, configure_http_timeouts
 from .review import is_irrelevant
 from .scrape import (
-    MAX_PAGES_PER_VIDEO,
     CommentSort,
-    PageBudget,
     comment_text,
     extract_replies,
-    fetch_all_top_level,
+    iter_top_level_pages,
     replies_is_empty,
 )
 from .throttle import random_sleep
-from .export import write_sampled_comments_csv
+from .export import IncrementalCommentSink, write_sampled_comments_csv
 from .video import parse_video_ref
 
 PROGRESS_LOG_EVERY_PAGES = 10
@@ -104,15 +101,16 @@ def save_resume_state(output_path: Path | str, state: dict[str, Any]) -> Path:
 
 def completed_aid_set(
     output_path: Path | str,
-    existing_rows: list[dict[str, Any]],
+    existing_rows: list[dict[str, Any]] | None = None,
 ) -> set[str]:
     """
-    Aids considered fully scraped: listed in resume JSON or present in CSV output.
+    Aids considered fully scraped (skip on resume).
 
-    CSV detection requires at least one primary row for that aid (written only after
-    a full successful video scrape in resumable mode).
+    Only the resume sidecar counts — partial CSV data from an interrupted run does
+    not mark a video complete.
     """
-    aids = aids_with_primary_comments(existing_rows)
+    _ = existing_rows  # kept for call-site compatibility
+    aids: set[str] = set()
     state = load_resume_state(output_path)
     for entry in state.get("completed", []):
         if isinstance(entry, dict):
@@ -232,146 +230,137 @@ async def fetch_all_sub_comments(
     delay_seconds: float = 1.0,
     on_page_fetched: Callable[[int, int, int], None] | None = None,
     bvid: str = "",
-    page_budget: PageBudget | None = None,
 ) -> list[dict[str, Any]]:
-    """Paginate sub-comments for one top-level thread."""
+    """
+    Paginate sub-comments for one top-level thread.
+
+    Always returns a ``list`` (never ``None``). On timeout, API error, or page cap,
+    returns whatever was collected so the parent loop can continue.
+    """
     collected: list[dict[str, Any]] = []
-    seen: set[int] = set()
-    page_index = 1
-    page_size = 10
-    max_pages = min(
-        _MAX_SUB_COMMENT_PAGES,
-        max(1, (expected_count // page_size) + 3),
-    )
-    if page_budget is not None:
-        max_pages = min(max_pages, page_budget.remaining())
-    label = bvid or str(oid)
-
-    while page_index <= max_pages:
-        if page_budget is not None and page_budget.exhausted:
-            break
-
-        cm = comment.Comment(
-            oid=oid,
-            type_=comment.CommentResourceType.VIDEO,
-            rpid=root_rpid,
-            credential=credential,
+    try:
+        seen: set[int] = set()
+        page_index = 1
+        page_size = 10
+        max_pages = min(
+            _MAX_SUB_COMMENT_PAGES,
+            max(1, (expected_count // page_size) + 3),
         )
-        try:
-            page = await call_with_retry(
+        label = bvid or str(oid)
+
+        while page_index <= max_pages:
+            cm = comment.Comment(
+                oid=oid,
+                type_=comment.CommentResourceType.VIDEO,
+                rpid=root_rpid,
+                credential=credential,
+            )
+            page = await call_with_retry_or_default(
                 lambda p=page_index: cm.get_sub_comments(p),
+                default={},
                 label=f"{label} sub-replies page {page_index} (rpid {root_rpid})",
             )
-        except (ResponseCodeException, ApiException) as exc:
-            print(
-                f"  WARNING: sub-replies page {page_index} failed for {label} "
-                f"rpid {root_rpid} ({exc}); skipping to next page",
-                flush=True,
-            )
+            if not page or replies_is_empty(page):
+                break
+
+            replies = extract_replies(page)
+            if not replies or len(replies) == 0:
+                break
+
+            added_this_page = 0
+            for reply in replies:
+                rpid = reply.get("rpid")
+                if rpid is None:
+                    continue
+                rpid_int = int(rpid)
+                if rpid_int in seen:
+                    continue
+                seen.add(rpid_int)
+                collected.append(reply)
+                added_this_page += 1
+
+            if on_page_fetched is not None:
+                on_page_fetched(page_index, root_rpid, len(collected))
+
+            if added_this_page == 0:
+                break
+
+            page_info = page.get("page") or {}
+            page_count = _parse_int(page_info.get("count"), len(collected))
+            page_size = max(1, _parse_int(page_info.get("size"), 10))
+            if len(collected) >= expected_count or len(replies) < page_size:
+                break
+            if page_index * page_size >= page_count:
+                break
+
             page_index += 1
-            continue
-
-        if replies_is_empty(page):
-            break
-
-        replies = extract_replies(page)
-
-        added_this_page = 0
-        for reply in replies:
-            rpid = reply.get("rpid")
-            if rpid is None:
-                continue
-            rpid_int = int(rpid)
-            if rpid_int in seen:
-                continue
-            seen.add(rpid_int)
-            collected.append(reply)
-            added_this_page += 1
-
-        if page_budget is not None:
-            page_budget.record(1)
-
-        if on_page_fetched is not None:
-            on_page_fetched(page_index, root_rpid, len(collected))
-
-        if page_budget is not None and page_budget.exhausted:
-            break
-
-        # API returned rows but none were new — thread end or stuck cursor.
-        if added_this_page == 0:
-            break
-
-        page_info = page.get("page") or {}
-        page_count = _parse_int(page_info.get("count"), len(collected))
-        page_size = max(1, _parse_int(page_info.get("size"), 10))
-        if len(collected) >= expected_count or len(replies) < page_size:
-            break
-        if page_index * page_size >= page_count:
-            break
-
-        page_index += 1
-        if delay_seconds > 0:
-            await random_sleep(delay_seconds)
+            if delay_seconds > 0:
+                await random_sleep(delay_seconds)
+    except Exception as exc:
+        print(
+            f"  WARNING: sub-replies aborted for {bvid or oid} rpid {root_rpid} "
+            f"({exc}); returning {len(collected)} collected",
+            flush=True,
+        )
 
     return collected
 
 
-async def scrape_video_comments(
-    video: dict[str, Any],
-    credential: Credential,
+async def _process_primary_comment(
+    primary: dict[str, Any],
     *,
-    sort: CommentSort = CommentSort.HOT,
-    delay_seconds: float = 1.0,
-    max_primaries: int | None = None,
-    progress: ScrapeProgress | None = None,
+    video: dict[str, Any],
+    aid: int,
+    credential: Credential,
+    top_rpids: set[int],
+    delay_seconds: float,
+    prog: ScrapeProgress,
+    bvid: str,
 ) -> list[dict[str, Any]]:
-    """Scrape all primary + their secondary comments for one video."""
-    aid = int(video["aid"])
     rows: list[dict[str, Any]] = []
-    bvid = video.get("bvid") or str(aid)
-    prog = progress or ScrapeProgress(str(bvid))
+    rpid = int(primary["rpid"])
+    is_top = rpid in top_rpids
+    rows.append(_comment_row(primary, video=video, level="primary", is_top=is_top))
 
-    def on_primary_page(page_num: int, primary_count: int) -> None:
-        prog.on_primary_page(page_num, primary_count)
+    inline = primary.get("replies") or []
+    secondary_seen: set[int] = set()
 
-    configure_http_timeouts()
-    page_budget = PageBudget(MAX_PAGES_PER_VIDEO)
-
-    primaries, top_rpids = await fetch_all_top_level(
-        aid,
-        credential,
-        sort=sort,
-        delay_seconds=delay_seconds,
-        max_primaries=max_primaries,
-        on_page_fetched=on_primary_page,
-        page_budget=page_budget,
-    )
-
-    if page_budget.exhausted:
-        print(
-            f"  Page limit ({MAX_PAGES_PER_VIDEO}) reached for {bvid} "
-            f"during primary fetch; saving partial results",
-            flush=True,
-        )
-
-    for primary in primaries:
-        if page_budget.exhausted:
-            break
-
-        rpid = int(primary["rpid"])
-        is_top = rpid in top_rpids
+    for sub in inline:
+        if sub.get("rpid") is None:
+            continue
+        sub_id = int(sub["rpid"])
+        secondary_seen.add(sub_id)
         rows.append(
-            _comment_row(primary, video=video, level="primary", is_top=is_top)
+            _comment_row(
+                sub,
+                video=video,
+                level="secondary",
+                is_top=False,
+                parent_rpid=rpid,
+            )
         )
-        prog.add_rows(1)
 
-        inline = primary.get("replies") or []
-        secondary_seen: set[int] = set()
+    total_subs = _parse_int(primary.get("count", 0))
+    if total_subs > len(secondary_seen):
 
-        for sub in inline:
+        def on_secondary_page(page_num: int, thread_rpid: int, collected: int) -> None:
+            prog.on_secondary_page(page_num, thread_rpid, collected)
+
+        extra = await fetch_all_sub_comments(
+            aid,
+            rpid,
+            credential,
+            expected_count=total_subs,
+            delay_seconds=delay_seconds,
+            on_page_fetched=on_secondary_page,
+            bvid=bvid,
+        )
+        for sub in extra:
             if sub.get("rpid") is None:
                 continue
             sub_id = int(sub["rpid"])
+            if sub_id in secondary_seen:
+                continue
             secondary_seen.add(sub_id)
             rows.append(
                 _comment_row(
@@ -382,55 +371,72 @@ async def scrape_video_comments(
                     parent_rpid=rpid,
                 )
             )
-            prog.add_rows(1)
 
-        total_subs = _parse_int(primary.get("count", 0))
-        if total_subs > len(secondary_seen) and not page_budget.exhausted:
+    return rows
 
-            def on_secondary_page(
-                page_num: int, thread_rpid: int, collected: int
-            ) -> None:
-                prog.on_secondary_page(page_num, thread_rpid, collected)
 
-            extra = await fetch_all_sub_comments(
-                aid,
-                rpid,
-                credential,
-                expected_count=total_subs,
+async def scrape_video_comments(
+    video: dict[str, Any],
+    credential: Credential,
+    *,
+    sort: CommentSort = CommentSort.HOT,
+    delay_seconds: float = 1.0,
+    max_primaries: int | None = None,
+    progress: ScrapeProgress | None = None,
+    sink: IncrementalCommentSink | None = None,
+) -> int:
+    """
+    Scrape one video: one primary page at a time, secondaries inline, flush to sink.
+
+    Returns the number of rows written for this video.
+    """
+    aid = int(video["aid"])
+    bvid = str(video.get("bvid") or aid)
+    prog = progress or ScrapeProgress(bvid)
+    top_rpids: set[int] = set()
+    rows_written = 0
+
+    configure_http_timeouts()
+
+    async for batch, page_top, page_num in iter_top_level_pages(
+        aid,
+        credential,
+        sort=sort,
+        delay_seconds=delay_seconds,
+        max_primaries=max_primaries,
+    ):
+        top_rpids |= page_top
+        prog.on_primary_page(page_num, rows_written)
+
+        page_rows: list[dict[str, Any]] = []
+        for primary in batch:
+            thread_rows = await _process_primary_comment(
+                primary,
+                video=video,
+                aid=aid,
+                credential=credential,
+                top_rpids=top_rpids,
                 delay_seconds=delay_seconds,
-                on_page_fetched=on_secondary_page,
-                bvid=str(bvid),
-                page_budget=page_budget,
+                prog=prog,
+                bvid=bvid,
             )
-            if page_budget.exhausted:
-                print(
-                    f"  Page limit ({MAX_PAGES_PER_VIDEO}) reached for {bvid}; "
-                    "saving partial results",
-                    flush=True,
-                )
-                break
-            for sub in extra:
-                if sub.get("rpid") is None:
-                    continue
-                sub_id = int(sub["rpid"])
-                if sub_id in secondary_seen:
-                    continue
-                secondary_seen.add(sub_id)
-                rows.append(
-                    _comment_row(
-                        sub,
-                        video=video,
-                        level="secondary",
-                        is_top=False,
-                        parent_rpid=rpid,
-                    )
-                )
-                prog.add_rows(1)
+            page_rows.extend(thread_rows)
+
+        if page_rows:
+            if sink is not None:
+                sink.append(page_rows)
+            rows_written += len(page_rows)
+            prog.total_rows = rows_written
+            print(
+                f"  Saved primary page {page_num} for {bvid} "
+                f"({len(page_rows)} rows, total: {rows_written})",
+                flush=True,
+            )
 
         if delay_seconds > 0:
             await random_sleep(delay_seconds)
 
-    return rows
+    return rows_written
 
 
 async def scrape_sampled_videos(
@@ -450,12 +456,11 @@ async def scrape_sampled_videos(
     sidecar state, skips completed BV ids, and writes the CSV after each video.
     """
     configure_http_timeouts()
-    all_rows: list[dict[str, Any]] = []
     completed_aids: set[str] = set()
 
     if output_path is not None and resume:
-        all_rows = load_existing_comments_csv(output_path)
-        completed_aids = completed_aid_set(output_path, all_rows)
+        existing = load_existing_comments_csv(output_path)
+        completed_aids = completed_aid_set(output_path, existing)
         if completed_aids:
             print(
                 f"resume:   {len(completed_aids)} video(s) already in "
@@ -475,25 +480,41 @@ async def scrape_sampled_videos(
 
         print(f"[{i}/{total}] Scraping {label} …", flush=True)
         progress = ScrapeProgress(str(label))
+        sink: IncrementalCommentSink | None = None
         try:
-            rows = await scrape_video_comments(
+            if output_path is not None:
+                existing = load_existing_comments_csv(output_path)
+                kept = [
+                    r
+                    for r in existing
+                    if str(r.get("video_aid", r.get("aid", ""))) != aid
+                ]
+                sink = IncrementalCommentSink.prepare_video_output(
+                    output_path, aid, keep_rows=kept
+                )
+
+            row_count = await scrape_video_comments(
                 video,
                 credential,
                 sort=sort,
                 delay_seconds=delay_seconds,
                 max_primaries=max_primaries,
                 progress=progress,
+                sink=sink,
             )
-            all_rows = merge_comments_for_video(all_rows, rows, aid)
-            print(f"  → {len(rows)} comments (total rows: {len(all_rows)})", flush=True)
+            if sink is not None:
+                sink.close()
+
+            print(f"  → {row_count} comments saved for this video", flush=True)
 
             if output_path is not None:
-                write_sampled_comments_csv(all_rows, output_path)
                 mark_video_completed(
-                    output_path, aid=aid, bvid=str(label), row_count=len(rows)
+                    output_path, aid=aid, bvid=str(label), row_count=row_count
                 )
                 completed_aids.add(aid)
         except Exception as exc:
+            if sink is not None:
+                sink.close()
             print(f"  → FAILED: {exc}", flush=True)
 
         has_more_to_scrape = any(
@@ -502,7 +523,9 @@ async def scrape_sampled_videos(
         if delay_seconds > 0 and has_more_to_scrape:
             await random_sleep(delay_seconds)
 
-    return all_rows
+    if output_path is not None:
+        return load_existing_comments_csv(output_path)
+    return []
 
 
 def load_existing_comments_csv(path: Path | str) -> list[dict[str, Any]]:

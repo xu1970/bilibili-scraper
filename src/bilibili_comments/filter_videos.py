@@ -154,6 +154,9 @@ def compute_exclusion_reason(row: dict[str, Any]) -> str:
     dm_reason = danmaku_exclusion_reason(row)
     if dm_reason:
         reasons.append(dm_reason)
+    manual = str(row.get("manual_exclusion_reason", "") or "").strip()
+    if manual:
+        reasons.append(manual)
     return "; ".join(reasons)
 
 

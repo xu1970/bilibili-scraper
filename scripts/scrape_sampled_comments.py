@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from bilibili_comments.auth import load_credential
 from bilibili_comments.request_guard import configure_http_timeouts
-from bilibili_comments.export import write_sampled_comments_csv
+from bilibili_comments.export import IncrementalCommentSink, write_sampled_comments_csv
 from bilibili_comments.scrape import CommentSort
 from bilibili_comments.scrape_sampled import (
     completed_aid_set,
@@ -88,20 +88,28 @@ async def main() -> None:
         print(f"test bvid: {ref.bvid} (aid {ref.aid})")
         print(f"primary:   ALL top-level comments")
         print(f"sort:      {sort.label}")
-        new_rows = await scrape_video_comments(
+        existing = load_existing_comments_csv(args.output)
+        kept = [
+            r
+            for r in existing
+            if str(r.get("video_aid", r.get("aid", ""))) != str(ref.aid)
+        ]
+        sink = IncrementalCommentSink.prepare_video_output(
+            args.output, str(ref.aid), keep_rows=kept
+        )
+        row_count = await scrape_video_comments(
             video,
             credential,
             sort=sort,
             delay_seconds=args.delay,
             max_primaries=args.max_primaries,
+            sink=sink,
         )
-        existing = load_existing_comments_csv(args.output)
-        merged = merge_comments_for_video(existing, new_rows, str(ref.aid))
-        out = write_sampled_comments_csv(merged, args.output)
-        levels = Counter(r.get("comment_level") for r in new_rows)
-        print(f"this video: {len(new_rows)} comments ({dict(levels)})")
+        sink.close()
+        merged = load_existing_comments_csv(args.output)
+        print(f"this video: {row_count} comments saved")
         print(f"csv total:  {len(merged)} rows")
-        print(f"saved:      {out.resolve()}")
+        print(f"saved:      {args.output.resolve()}")
         return
 
     videos = load_sampled_videos(args.sampled, master_path=args.master)
@@ -126,11 +134,9 @@ async def main() -> None:
         resume=resume,
     )
 
-    out = write_sampled_comments_csv(rows, args.output)
     levels = Counter(r.get("comment_level") for r in rows)
-
     print(f"comments: {len(rows)} ({dict(levels)})")
-    print(f"saved:    {out.resolve()}")
+    print(f"saved:    {args.output.resolve()}")
 
 
 if __name__ == "__main__":

@@ -74,6 +74,22 @@ def write_comments_csv(rows: list[dict[str, Any]], path: Path | str) -> Path:
     return out
 
 
+def _sampled_row_for_csv(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "aid": row.get("video_aid", row.get("aid", "")),
+        "comment_level": row.get("comment_level", ""),
+        "is_top_comment": row.get("is_top_comment", "no"),
+        "rpid": row.get("rpid", ""),
+        "parent_rpid": row.get("parent_rpid", ""),
+        "root_rpid": row.get("root_rpid", ""),
+        "username": row.get("username", ""),
+        "comment_text": row.get("comment_text", ""),
+        "timestamp": _export_timestamp(row.get("timestamp")),
+        "like_count": row.get("like_count", 0),
+        "reply_count": row.get("reply_count", ""),
+    }
+
+
 def write_sampled_comments_csv(rows: list[dict[str, Any]], path: Path | str) -> Path:
     """Write scraped comments from sampled videos to one combined CSV."""
     out = Path(path)
@@ -85,23 +101,55 @@ def write_sampled_comments_csv(rows: list[dict[str, Any]], path: Path | str) -> 
         )
         writer.writeheader()
         for row in rows:
-            writer.writerow(
-                {
-                    "aid": row.get("video_aid", row.get("aid", "")),
-                    "comment_level": row.get("comment_level", ""),
-                    "is_top_comment": row.get("is_top_comment", "no"),
-                    "rpid": row.get("rpid", ""),
-                    "parent_rpid": row.get("parent_rpid", ""),
-                    "root_rpid": row.get("root_rpid", ""),
-                    "username": row.get("username", ""),
-                    "comment_text": row.get("comment_text", ""),
-                    "timestamp": _export_timestamp(row.get("timestamp")),
-                    "like_count": row.get("like_count", 0),
-                    "reply_count": row.get("reply_count", ""),
-                }
-            )
+            writer.writerow(_sampled_row_for_csv(row))
 
     return out
+
+
+class IncrementalCommentSink:
+    """
+    Append comment rows to a CSV and flush after each batch.
+
+    Call ``prepare_video_output`` before scraping a video so prior rows for that
+    aid are removed, then ``append`` + ``flush`` as each primary page is processed.
+    """
+
+    def __init__(self, path: Path | str) -> None:
+        self.path = Path(path)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._file = self.path.open("a", encoding="utf-8-sig", newline="")
+        self._writer = csv.DictWriter(
+            self._file,
+            fieldnames=SAMPLED_COMMENTS_CSV_COLUMNS,
+            extrasaction="ignore",
+        )
+        self.rows_written = 0
+
+    @classmethod
+    def prepare_video_output(
+        cls,
+        path: Path | str,
+        video_aid: str,
+        *,
+        keep_rows: list[dict[str, Any]],
+    ) -> IncrementalCommentSink:
+        """Rewrite CSV without ``video_aid``, then open for append."""
+        write_sampled_comments_csv(keep_rows, path)
+        return cls(path)
+
+    def append(self, rows: list[dict[str, Any]]) -> None:
+        if not rows:
+            return
+        for row in rows:
+            self._writer.writerow(_sampled_row_for_csv(row))
+        self.rows_written += len(rows)
+        self.flush()
+
+    def flush(self) -> None:
+        self._file.flush()
+
+    def close(self) -> None:
+        self._file.close()
 
 
 SEARCH_CSV_COLUMNS = [

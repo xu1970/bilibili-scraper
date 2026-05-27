@@ -49,3 +49,32 @@ async def call_with_retry(
             if attempt < retries - 1:
                 await asyncio.sleep(retry_delay * (attempt + 1))
     raise last_exc  # type: ignore[misc]
+
+
+async def call_with_retry_or_default(
+    coro_factory: Callable[[], Awaitable[T]],
+    *,
+    default: T,
+    label: str = "request",
+    retries: int = 3,
+    retry_delay: float = 2.0,
+) -> T:
+    """
+    Like ``call_with_retry`` but returns ``default`` instead of raising on failure.
+
+    Ensures callers always get a usable value (e.g. ``[]``) and never hang waiting
+    on a stuck coroutine beyond the library HTTP timeout.
+    """
+    try:
+        return await call_with_retry(
+            coro_factory,
+            label=label,
+            retries=retries,
+            retry_delay=retry_delay,
+        )
+    except (ResponseCodeException, ApiException) as exc:
+        print(
+            f"  WARNING: {label} failed after retries ({exc}); using default",
+            flush=True,
+        )
+        return default

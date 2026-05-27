@@ -8,6 +8,11 @@ from .export import (
     write_search_csv,
 )
 from .filter_videos import apply_search_filters, compute_exclusion_reason, is_eligible_for_sampling
+from .remove_video_comments import (
+    remove_comments_for_video,
+    remove_comments_for_videos,
+    unmark_video_completed,
+)
 from .review import apply_review_replacements, is_irrelevant, load_sampled_csv
 from .scrape_sampled import load_sampled_videos, scrape_sampled_videos
 from .sample import (
@@ -23,6 +28,7 @@ from .scrape import (
     describe_sort_mode,
     extract_replies,
     fetch_all_top_level,
+    iter_top_level_pages,
     fetch_comments_for_bvid,
     fetch_n_pages,
     fetch_top_level_page,
@@ -38,6 +44,9 @@ __all__ = [
     "collect_reply_rows",
     "fetch_n_pages",
     "parse_reply_row",
+    "remove_comments_for_video",
+    "remove_comments_for_videos",
+    "unmark_video_completed",
     "apply_review_replacements",
     "apply_search_filters",
     "compute_exclusion_reason",
@@ -60,6 +69,7 @@ __all__ = [
     "describe_sort_mode",
     "extract_replies",
     "fetch_all_top_level",
+    "iter_top_level_pages",
     "fetch_comments_for_bvid",
     "fetch_top_level_page",
     "fetch_two_pages",

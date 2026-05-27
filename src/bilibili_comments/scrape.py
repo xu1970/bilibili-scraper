@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import enum
 import json
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 from typing import Any
 
 from bilibili_api import comment
@@ -22,25 +22,6 @@ _API = get_api("common")
 
 # Safety limit for primary-comment pagination loops.
 _DEFAULT_MAX_REQUESTS = 500
-MAX_PAGES_PER_VIDEO = 100
-
-
-class PageBudget:
-    """Tracks API pagination pages consumed for one video."""
-
-    def __init__(self, limit: int = MAX_PAGES_PER_VIDEO) -> None:
-        self.limit = limit
-        self.pages = 0
-
-    @property
-    def exhausted(self) -> bool:
-        return self.pages >= self.limit
-
-    def record(self, n: int = 1) -> None:
-        self.pages += n
-
-    def remaining(self) -> int:
-        return max(0, self.limit - self.pages)
 
 
 class CommentSort(enum.Enum):
@@ -209,7 +190,7 @@ def _advance_primary_pagination(
     return use_offset_paging, offset, next_index + 1
 
 
-async def fetch_all_top_level(
+async def iter_top_level_pages(
     oid: int,
     credential: Credential,
     *,
@@ -218,22 +199,18 @@ async def fetch_all_top_level(
     max_primaries: int | None = None,
     max_requests: int = _DEFAULT_MAX_REQUESTS,
     delay_seconds: float = 0.0,
-    on_page_fetched: Callable[[int, int], None] | None = None,
-    page_budget: PageBudget | None = None,
-) -> tuple[list[dict[str, Any]], set[int]]:
+) -> AsyncIterator[tuple[list[dict[str, Any]], set[int], int]]:
     """
-    Fetch all primary (top-level) comments by paginating until exhausted or capped.
+    Yield one primary comment page at a time: ``(replies, top_rpids, page_num)``.
 
     Pagination order:
     1. ``pagination_str`` / ``pagination_reply.next_offset`` (new WBI cursor)
     2. Synthetic offset from ``session_id`` + ``cursor.next`` when provided
     3. Legacy ``cursor.next`` index (older API behavior)
     """
-    all_replies: list[dict[str, Any]] = []
-    top_rpids: set[int] = set()
     seen_rpids: set[int] = set()
+    total_primaries = 0
 
-    # First request uses empty offset when WBI offset paging is available.
     offset: str | None = ""
     next_index = 0
     use_offset_paging = True
@@ -241,14 +218,8 @@ async def fetch_all_top_level(
     offset_paging_disabled = False
     page_num = 0
     consecutive_failures = 0
-    request_cap = max_requests
-    if page_budget is not None:
-        request_cap = min(max_requests, page_budget.remaining())
 
-    for _ in range(request_cap):
-        if page_budget is not None and page_budget.exhausted:
-            break
-
+    for _ in range(max_requests):
         pagination_arg: str | None
         if use_offset_paging and not offset_paging_disabled:
             pagination_arg = offset if offset is not None else ""
@@ -292,12 +263,8 @@ async def fetch_all_top_level(
         if replies_is_empty(page):
             break
 
-        top_rpids |= top_rpids_from_page(page)
-        batch = extract_replies(page)
-        batch_size = len(batch)
-        added_this_page = 0
-
-        for reply in batch:
+        batch: list[dict[str, Any]] = []
+        for reply in extract_replies(page):
             rpid = reply.get("rpid")
             if rpid is None:
                 continue
@@ -305,29 +272,19 @@ async def fetch_all_top_level(
             if rpid_int in seen_rpids:
                 continue
             seen_rpids.add(rpid_int)
-            all_replies.append(reply)
-            added_this_page += 1
+            batch.append(reply)
+            total_primaries += 1
 
         page_num += 1
-        if page_budget is not None:
-            page_budget.record(1)
-        if on_page_fetched is not None:
-            on_page_fetched(page_num, len(all_replies))
+        page_top = top_rpids_from_page(page)
+        yield batch, page_top, page_num
 
-        if page_budget is not None and page_budget.exhausted:
+        if max_primaries is not None and total_primaries >= max_primaries:
             break
-
-        if max_primaries is not None and len(all_replies) >= max_primaries:
-            break
-
-        # Empty page or API repeating the same rpids — stop paginating.
-        if replies_is_empty(page) or batch_size == 0:
-            break
-        if added_this_page == 0:
+        if not batch:
             break
 
         cursor = page.get("cursor") or {}
-
         new_offset = pagination_next_offset(page)
         if new_offset is None:
             new_offset = _synthetic_offset_from_cursor(page)
@@ -342,7 +299,6 @@ async def fetch_all_top_level(
             continue
 
         next_cursor = pagination_next_index(page)
-
         if cursor.get("is_end") and next_cursor in (None, 0):
             break
         if next_cursor is None:
@@ -359,9 +315,36 @@ async def fetch_all_top_level(
         if delay_seconds > 0:
             await random_sleep(delay_seconds)
 
+
+async def fetch_all_top_level(
+    oid: int,
+    credential: Credential,
+    *,
+    sort: CommentSort = CommentSort.HOT,
+    ps: int = 30,
+    max_primaries: int | None = None,
+    max_requests: int = _DEFAULT_MAX_REQUESTS,
+    delay_seconds: float = 0.0,
+    on_page_fetched: Callable[[int, int], None] | None = None,
+) -> tuple[list[dict[str, Any]], set[int]]:
+    """Collect all primary pages (legacy bulk API). Prefer ``iter_top_level_pages``."""
+    all_replies: list[dict[str, Any]] = []
+    top_rpids: set[int] = set()
+    async for batch, page_top, page_num in iter_top_level_pages(
+        oid,
+        credential,
+        sort=sort,
+        ps=ps,
+        max_primaries=max_primaries,
+        max_requests=max_requests,
+        delay_seconds=delay_seconds,
+    ):
+        top_rpids |= page_top
+        all_replies.extend(batch)
+        if on_page_fetched is not None:
+            on_page_fetched(page_num, len(all_replies))
     if max_primaries is not None and len(all_replies) > max_primaries:
         all_replies = all_replies[:max_primaries]
-
     return all_replies, top_rpids
 
 

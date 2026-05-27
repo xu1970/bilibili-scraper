@@ -60,6 +60,7 @@ def load_search_csv(path: Path | str) -> list[dict[str, Any]]:
                     "danmaku": _parse_view_count(row.get("danmaku")),
                     "in_sample": row.get("in_sample", "no"),
                     "exclusion_reason": row.get("exclusion_reason", ""),
+                    "manual_exclusion_reason": row.get("manual_exclusion_reason", ""),
                     "search_rank": _parse_view_count(row.get("search_rank")) or "",
                     "eligible_rank": int(er) if str(er).strip().isdigit() else "",
                 }
