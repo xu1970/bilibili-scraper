@@ -17,7 +17,7 @@ from bilibili_comments.search_videos import search_videos
 
 DEFAULT_KEYWORD = "生育"
 DEFAULT_PAGES = 34
-DEFAULT_OUTPUT = Path("search_生育_p20.csv")
+DEFAULT_OUTPUT = Path("search_生育.csv")
 
 
 async def main() -> None:
