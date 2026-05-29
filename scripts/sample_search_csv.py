@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from bilibili_comments.export import write_sampled_search_csv, write_search_csv
 from bilibili_comments.filter_videos import apply_search_filters, filter_summary
+from bilibili_comments.paths import sampled_csv, search_csv
 from bilibili_comments.sample import (
     ADAPTIVE_SAMPLE_ELIGIBLE_THRESHOLD,
     MID_SAMPLE_MAX,
@@ -24,14 +25,14 @@ from bilibili_comments.sample import (
     rank_based_sample_videos,
 )
 
-DEFAULT_INPUT = Path("search_生育.csv")
-DEFAULT_OUTPUT = Path("search_生育_sampled.csv")
+DEFAULT_KEYWORD = "生育"
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Rank-based sample of search results")
-    parser.add_argument("--input", type=Path, default=DEFAULT_INPUT, help="Search CSV")
-    parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT, help="Sampled CSV")
+    parser.add_argument("--keyword", default=DEFAULT_KEYWORD, help="Search keyword (used for default filenames)")
+    parser.add_argument("--input", type=Path, default=None, help="Search CSV (default: search_<keyword>.csv)")
+    parser.add_argument("--output", type=Path, default=None, help="Sampled CSV (default: search_<keyword>_sampled.csv)")
     parser.add_argument(
         "--min-views",
         type=int,
@@ -45,6 +46,11 @@ def main() -> None:
         help="Random seed for reproducible sampling",
     )
     args = parser.parse_args()
+
+    if args.input is None:
+        args.input = search_csv(args.keyword)
+    if args.output is None:
+        args.output = sampled_csv(args.keyword)
 
     rows = load_search_csv(args.input)
     apply_search_filters(rows)

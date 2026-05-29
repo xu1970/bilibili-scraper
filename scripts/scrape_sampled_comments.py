@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from bilibili_comments.auth import load_credential
 from bilibili_comments.request_guard import configure_http_timeouts
 from bilibili_comments.export import IncrementalCommentSink, write_sampled_comments_csv
+from bilibili_comments.paths import comments_csv, sampled_csv, search_csv
 from bilibili_comments.scrape import CommentSort
 from bilibili_comments.scrape_sampled import (
     completed_aid_set,
@@ -26,18 +27,17 @@ from bilibili_comments.scrape_sampled import (
 )
 from bilibili_comments.video import parse_video_ref
 
-DEFAULT_SAMPLED = Path("search_生育_p20_sampled.csv")
-DEFAULT_MASTER = Path("search_生育_p20.csv")
-DEFAULT_OUTPUT = Path("comments_sampled_生育.csv")
+DEFAULT_KEYWORD = "生育"
 
 
 async def main() -> None:
     parser = argparse.ArgumentParser(
         description="Scrape comments for videos in the sampled CSV"
     )
-    parser.add_argument("--sampled", type=Path, default=DEFAULT_SAMPLED)
-    parser.add_argument("--master", type=Path, default=DEFAULT_MASTER)
-    parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
+    parser.add_argument("--keyword", default=DEFAULT_KEYWORD, help="Search keyword (used for default filenames)")
+    parser.add_argument("--sampled", type=Path, default=None, help="Sampled CSV (default: search_<keyword>_sampled.csv)")
+    parser.add_argument("--master", type=Path, default=None, help="Master search CSV (default: search_<keyword>.csv)")
+    parser.add_argument("--output", type=Path, default=None, help="Comments CSV (default: comments_sampled_<keyword>.csv)")
     parser.add_argument(
         "--bvid",
         default=None,
@@ -68,6 +68,13 @@ async def main() -> None:
         help="Re-scrape all videos even if already present in the output file",
     )
     args = parser.parse_args()
+
+    if args.sampled is None:
+        args.sampled = sampled_csv(args.keyword)
+    if args.master is None:
+        args.master = search_csv(args.keyword)
+    if args.output is None:
+        args.output = comments_csv(args.keyword)
 
     configure_http_timeouts()
     credential = load_credential()

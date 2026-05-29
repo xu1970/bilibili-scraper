@@ -22,6 +22,7 @@ from bilibili_comments.export import (
     write_search_csv,
 )
 from bilibili_comments.filter_videos import apply_search_filters
+from bilibili_comments.paths import replacements_csv, sampled_csv, search_csv
 from bilibili_comments.review import (
     IRRELEVANT_MARKERS,
     apply_review_replacements,
@@ -35,8 +36,7 @@ from bilibili_comments.sample import (
     mark_rows_in_sample,
 )
 
-DEFAULT_SAMPLED = Path("search_生育_p20_sampled.csv")
-DEFAULT_POOL = Path("search_生育_p20.csv")
+DEFAULT_KEYWORD = "生育"
 
 
 def prepare_review_pool(path: Path) -> list[dict]:
@@ -51,11 +51,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Replace sampled videos marked x/irrelevant (same rank bucket)"
     )
-    parser.add_argument("--sampled", type=Path, default=DEFAULT_SAMPLED)
+    parser.add_argument("--keyword", default=DEFAULT_KEYWORD, help="Search keyword (used for default filenames)")
+    parser.add_argument("--sampled", type=Path, default=None, help="Sampled CSV (default: search_<keyword>_sampled.csv)")
     parser.add_argument(
         "--pool",
         type=Path,
-        default=DEFAULT_POOL,
+        default=None,
         help="Master search CSV (rank buckets defined by eligible_rank)",
     )
     parser.add_argument(
@@ -77,6 +78,13 @@ def main() -> None:
         help="Do not update in_sample flags on the master search CSV",
     )
     args = parser.parse_args()
+
+    if args.sampled is None:
+        args.sampled = sampled_csv(args.keyword)
+    if args.pool is None:
+        args.pool = search_csv(args.keyword)
+    if args.log is None:
+        args.log = replacements_csv(args.keyword)
 
     sampled = load_sampled_csv(args.sampled)
 
@@ -113,9 +121,6 @@ def main() -> None:
             row["in_sample"] = "no"
         mark_rows_in_sample(pool, updated)
         write_search_csv(pool, args.pool)
-
-    if args.log is None:
-        args.log = args.sampled.with_name(f"{args.sampled.stem}_replacements.csv")
 
     write_replacement_log(log_entries, args.log, append=True)
 

@@ -13,14 +13,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from bilibili_comments.export import write_search_csv
 from bilibili_comments.filter_videos import apply_search_filters, filter_summary, is_eligible_for_sampling
 from bilibili_comments.exclude_sampled import apply_exclude_aids, collect_sampled_aids
+from bilibili_comments.paths import search_csv
 from bilibili_comments.sample import assign_eligible_ranks, load_search_csv
 
-DEFAULT_INPUT = Path("search_生育_p20.csv")
+DEFAULT_KEYWORD = "生育"
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Apply auto-filters to search results CSV")
-    parser.add_argument("--input", type=Path, default=DEFAULT_INPUT)
+    parser.add_argument("--keyword", default=DEFAULT_KEYWORD, help="Search keyword (used for default filenames)")
+    parser.add_argument("--input", type=Path, default=None, help="Search CSV (default: search_<keyword>.csv)")
     parser.add_argument(
         "--output",
         type=Path,
@@ -32,7 +34,7 @@ def main() -> None:
         type=Path,
         action="append",
         default=[],
-        help="A sampled CSV to exclude (can be repeated). Example: search_生育_p20_sampled.csv",
+        help="A sampled CSV to exclude (can be repeated). Example: search_生育_sampled.csv",
     )
     parser.add_argument(
         "--exclude-sampled-glob",
@@ -40,6 +42,9 @@ def main() -> None:
         help="Glob (relative to current directory) for sampled CSVs to exclude",
     )
     args = parser.parse_args()
+
+    if args.input is None:
+        args.input = search_csv(args.keyword)
 
     rows = load_search_csv(args.input)
     if not rows:

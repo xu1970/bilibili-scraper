@@ -16,14 +16,14 @@ PYTHONPATH=src
 
 ## Keyword 2 workflow: `生育意愿`
 
-### 1) Search → `search_生育意愿_p20.csv`
+### 1) Search → `search_生育意愿.csv`
 
 ```bash
 PYTHONPATH=src python3 scripts/search_to_csv.py \
   --keyword "生育意愿" \
   --pages 34 \
   --delay 1.0 \
-  --output "search_生育意愿_p20.csv"
+  --output "search_生育意愿.csv"
 ```
 
 ### 2) Filter (auto rules + exclude previously sampled videos)
@@ -33,8 +33,8 @@ appears in previously created sampled CSVs (by default: `search_*_sampled*.csv`)
 
 ```bash
 PYTHONPATH=src python3 scripts/filter_search_csv.py \
-  --input "search_生育意愿_p20.csv" \
-  --output "search_生育意愿_p20.csv" \
+  --keyword "生育意愿" \
+  --output "search_生育意愿.csv" \
   --exclude-sampled-glob "search_*_sampled*.csv"
 ```
 
@@ -44,22 +44,22 @@ Notes:
 
 ```bash
 PYTHONPATH=src python3 scripts/filter_search_csv.py \
-  --input "search_生育意愿_p20.csv" \
-  --exclude-sampled "search_生育_p20_sampled.csv"
+  --keyword "生育意愿" \
+  --exclude-sampled "search_生育_sampled.csv"
 ```
 
-### 3) Sample → `search_生育意愿_p20_sampled.csv`
+### 3) Sample → `search_生育意愿_sampled.csv`
 
 ```bash
 PYTHONPATH=src python3 scripts/sample_search_csv.py \
-  --input "search_生育意愿_p20.csv" \
-  --output "search_生育意愿_p20_sampled.csv" \
+  --keyword "生育意愿" \
+  --output "search_生育意愿_sampled.csv" \
   --seed 42
 ```
 
 ### 4) Manual review + replacements
 
-Open `search_生育意愿_p20_sampled.csv` and fill `review_marker` for rows you want to replace
+Open `search_生育意愿_sampled.csv` and fill `review_marker` for rows you want to replace
 (`x`, `irrelevant`, `exclude`, etc.).
 
 Create replacements file (same format as existing workflow) and apply:
@@ -68,14 +68,13 @@ Create replacements file (same format as existing workflow) and apply:
 PYTHONPATH=src python3 scripts/apply_review_replacements.py
 ```
 
-This produces/uses `search_生育意愿_p20_sampled_replacements.csv` and writes an updated sampled CSV.
+This produces/uses `search_生育意愿_sampled_replacements.csv` and writes an updated sampled CSV.
 
 ### 5) Scrape comments → `comments_sampled_生育意愿.csv`
 
 ```bash
 PYTHONPATH=src python3 scripts/scrape_sampled_comments.py \
-  --sampled "search_生育意愿_p20_sampled.csv" \
-  --master "search_生育意愿_p20.csv" \
+  --keyword "生育意愿" \
   --output "comments_sampled_生育意愿.csv" \
   --delay 1.0
 ```
