@@ -17,9 +17,11 @@ from bilibili_comments.sample import (
     ADAPTIVE_SAMPLE_ELIGIBLE_THRESHOLD,
     MID_SAMPLE_MAX,
     MIN_VIEW_COUNT,
+    TAKE_ALL_ELIGIBLE_THRESHOLD,
     TARGET_SAMPLE_TOTAL,
     TOP_SAMPLE_COUNT,
     assign_eligible_ranks,
+    eligible_for_sampling,
     load_search_csv,
     mark_rows_in_sample,
     rank_based_sample_videos,
@@ -68,15 +70,27 @@ def main() -> None:
     out = write_sampled_search_csv(sampled, args.output)
     summary = filter_summary(rows)
 
+    eligible_count = sum(
+        1
+        for r in rows
+        if r.get("eligible_rank") != ""
+        and eligible_for_sampling(r, min_view_count=args.min_views)
+    )
+
     buckets = Counter(r.get("sample_bucket") for r in sampled)
     print(f"input:      {args.input.resolve()} (ranks + in_sample updated)")
     print(f"eligible:   {summary['eligible']} videos passed auto-filter")
-    mode = (
-        "adaptive tiers"
-        if summary["eligible"] < ADAPTIVE_SAMPLE_ELIGIBLE_THRESHOLD
-        else f"top={TOP_SAMPLE_COUNT}, mid<={MID_SAMPLE_MAX}"
-    )
-    print(f"plan:       {mode}, total={TARGET_SAMPLE_TOTAL}")
+    print(f"in pool:    {eligible_count} videos (auto-filter + min-views {args.min_views})")
+    if eligible_count < TAKE_ALL_ELIGIBLE_THRESHOLD:
+        mode = f"take-all (pool < {TAKE_ALL_ELIGIBLE_THRESHOLD}, no sampling)"
+        print(f"plan:       {mode}, total={len(sampled)}")
+    else:
+        mode = (
+            "adaptive tiers"
+            if eligible_count < ADAPTIVE_SAMPLE_ELIGIBLE_THRESHOLD
+            else f"top={TOP_SAMPLE_COUNT}, mid<={MID_SAMPLE_MAX}"
+        )
+        print(f"plan:       {mode}, total={TARGET_SAMPLE_TOTAL}")
     print(f"seed:       {args.seed}")
     print(f"sampled:    {len(sampled)} videos")
     print(f"by bucket:  {dict(sorted(buckets.items()))}")

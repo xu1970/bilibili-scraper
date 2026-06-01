@@ -25,6 +25,8 @@ TARGET_SAMPLE_TOTAL = TOP_SAMPLE_COUNT + MID_SAMPLE_MAX + REST_SAMPLE_COUNT  # 5
 
 # When fewer than this many videos pass filters, use tiered adaptive rates.
 ADAPTIVE_SAMPLE_ELIGIBLE_THRESHOLD = 350
+# When fewer than this many videos pass filters, skip sampling and keep them all.
+TAKE_ALL_ELIGIBLE_THRESHOLD = 100
 BLOCK_SIZE = 50
 TOP_RATE_BONUS = 0.05  # +5% on base rate for first block
 RATE_STEP_PER_BLOCK = 0.02  # −2% per subsequent block of 50
@@ -205,6 +207,16 @@ def _adaptive_sample_videos(
     return sampled[:target_total]
 
 
+def _take_all_eligible(eligible: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Keep every eligible video (no sampling) and prepare it for manual review."""
+    chosen = sorted(eligible, key=lambda r: int(r["eligible_rank"]))
+    for row in chosen:
+        block_index = (int(row["eligible_rank"]) - 1) // BLOCK_SIZE
+        row["sample_bucket"] = _block_bucket_name(block_index)
+        row["review_marker"] = ""
+    return chosen
+
+
 def _sample_from_bucket(
     rng: random.Random,
     bucket: list[dict[str, Any]],
@@ -274,8 +286,11 @@ def rank_based_sample_videos(
     """
     Sample from the filtered list in search output order (target: 50 videos).
 
-    When ``eligible < 350``: tiered adaptive rates (base rate + 5% for ranks
-    1–50, −2% per subsequent block of 50).
+    When ``eligible < 100``: skip sampling entirely — keep every eligible video
+    and prepare it for manual review.
+
+    When ``100 <= eligible < 350``: tiered adaptive rates (base rate + 5% for
+    ranks 1–50, −2% per subsequent block of 50).
 
     When ``eligible >= 350``: fixed buckets — 10 from top 50, up to 30 from
     51–350, remainder from 351+.
@@ -288,6 +303,9 @@ def rank_based_sample_videos(
         for r in ordered
         if r.get("eligible_rank") != "" and eligible_for_sampling(r, min_view_count=min_view_count)
     ]
+
+    if len(eligible) < TAKE_ALL_ELIGIBLE_THRESHOLD:
+        return _take_all_eligible(eligible)
 
     if len(eligible) < ADAPTIVE_SAMPLE_ELIGIBLE_THRESHOLD:
         return _adaptive_sample_videos(eligible, rng)

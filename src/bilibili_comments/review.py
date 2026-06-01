@@ -275,6 +275,48 @@ def apply_review_replacements(
     return updated, log_entries
 
 
+def drop_review_marked(
+    sampled: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """
+    Remove rows marked irrelevant **without** drawing replacements.
+
+    Used in take-all mode (small pool): every eligible video is already in the
+    sample, so there is nothing to replace dropped videos with.
+
+    Returns (kept rows, log entries describing each dropped video).
+    """
+    kept: list[dict[str, Any]] = []
+    log_entries: list[dict[str, Any]] = []
+    dropped_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+
+    for row in sampled:
+        if is_irrelevant(row.get("review_marker", "")):
+            snap = _row_snapshot(row)
+            log_entries.append(
+                {
+                    "replaced_at": dropped_at,
+                    "page": snap["page"],
+                    "sample_bucket": snap["sample_bucket"],
+                    "pool_bucket": "(dropped, no replacement)",
+                    "original_rank": snap["rank"],
+                    "original_eligible_rank": snap["eligible_rank"],
+                    "original_title": snap["title"],
+                    "original_view_count": snap["view_count"],
+                    "original_aid": snap["aid"],
+                    "replacement_rank": "",
+                    "replacement_eligible_rank": "",
+                    "replacement_title": "",
+                    "replacement_view_count": "",
+                    "replacement_aid": "",
+                }
+            )
+        else:
+            kept.append(deepcopy(row))
+
+    return kept, log_entries
+
+
 def load_replacement_log(path: Path | str) -> list[dict[str, Any]]:
     """Load an existing replacement log CSV, or return [] if missing."""
     p = Path(path)

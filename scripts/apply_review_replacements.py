@@ -26,12 +26,15 @@ from bilibili_comments.paths import replacements_csv, sampled_csv, search_csv
 from bilibili_comments.review import (
     IRRELEVANT_MARKERS,
     apply_review_replacements,
+    drop_review_marked,
     is_irrelevant,
     load_sampled_csv,
 )
 from bilibili_comments.sample import (
     MIN_VIEW_COUNT,
+    TAKE_ALL_ELIGIBLE_THRESHOLD,
     assign_eligible_ranks,
+    eligible_for_sampling,
     load_search_csv,
     mark_rows_in_sample,
 )
@@ -107,6 +110,46 @@ def main() -> None:
         return
 
     pool = prepare_review_pool(args.pool)
+    eligible_pool_count = sum(
+        1 for r in pool if eligible_for_sampling(r, min_view_count=args.min_views)
+    )
+
+    if eligible_pool_count < TAKE_ALL_ELIGIBLE_THRESHOLD:
+        # Take-all mode: the sample already contains every eligible video, so there
+        # are no spare videos to replace marked rows with. Drop them instead.
+        updated, log_entries = drop_review_marked(sampled)
+
+        write_sampled_search_csv(updated, args.sampled)
+
+        if not args.no_sync_master:
+            for row in pool:
+                row["in_sample"] = "no"
+            mark_rows_in_sample(pool, updated)
+            write_search_csv(pool, args.pool)
+
+        write_replacement_log(log_entries, args.log, append=True)
+
+        bucket_counts = Counter(r.get("sample_bucket") for r in updated)
+        print(
+            f"pool:         {eligible_pool_count} eligible video(s) "
+            f"(< {TAKE_ALL_ELIGIBLE_THRESHOLD}); dropping marked rows without replacement"
+        )
+        print(f"dropped:      {len(log_entries)} video(s)")
+        print(f"sampled csv:  {args.sampled.resolve()}")
+        if not args.no_sync_master:
+            print(f"master csv:   {args.pool.resolve()} (in_sample synced)")
+        print(f"log:          {args.log.resolve()} (appended)")
+        print(
+            f"sample size:  {len(updated)} by bucket: {dict(sorted(bucket_counts.items()))}"
+        )
+        for entry in log_entries:
+            print(
+                f"  {entry['sample_bucket']}: dropped "
+                f"eligible_rank {entry.get('original_eligible_rank')} "
+                f"aid {entry['original_aid']} ({entry.get('original_title')})"
+            )
+        return
+
     updated, log_entries = apply_review_replacements(
         sampled,
         pool,
