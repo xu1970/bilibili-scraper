@@ -209,15 +209,14 @@ def apply_review_replacements(
     Replace rows marked irrelevant with new random draws from the same rank bucket.
 
     Preserves per-bucket sample counts. Avoids duplicate ``aid`` values in the
-    final sample.
+    final sample. Videos already in the sample (including those marked for removal)
+    are never redrawn as replacements.
     """
     rng = random.Random(seed)
     updated = deepcopy(sampled)
 
     reserved_aids: set[str] = {
-        str(r["aid"])
-        for r in updated
-        if str(r.get("aid", "")) and not is_irrelevant(r.get("review_marker", ""))
+        str(r["aid"]) for r in updated if str(r.get("aid", ""))
     }
 
     log_entries: list[dict[str, Any]] = []
